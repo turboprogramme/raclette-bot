@@ -6,18 +6,23 @@ const pino = require("pino");
 const app = express();
 app.use(express.json());
 
-app.get("/", (req, res) => res.send("✅ API Raclette en ligne !"));
+// --- 1. RÉPONSE INSTANTANÉE POUR KOYEB (Évite l'erreur Health Check) ---
+app.get("/", (req, res) => res.status(200).send("API ACTIVE"));
 
+let sock = null;
+
+// --- 2. LOGIQUE DE CONNEXION WHATSAPP ---
 async function connectToWhatsApp() {
-    console.log("🚀 TENTATIVE DE CONNEXION...");
-    
+    console.log("🔄 Initialisation WhatsApp...");
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     
-    const sock = makeWASocket({
+    sock = makeWASocket({
         auth: state,
-        logger: pino({ level: 'info' }), // On active les logs pour voir l'erreur
+        logger: pino({ level: 'silent' }),
         printQRInTerminal: true,
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        connectTimeoutMs: 60000, // On laisse 1 min pour se connecter
+        defaultQueryTimeoutMs: 0
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -31,40 +36,31 @@ async function connectToWhatsApp() {
         }
         
         if (connection === 'open') {
-            console.log("✅ RACLETTE BOT CONNECTÉ !");
+            console.log("✅ RACLETTE BOT PRÊT !");
         }
         
         if (connection === 'close') {
-            const error = lastDisconnect?.error;
-            const statusCode = error?.output?.statusCode || error?.code;
-            
-            console.log(`❌ CONNEXION FERMÉE ! Code: ${statusCode}`);
-            console.log("Détails de l'erreur :", error);
-
-            // On ne reconnecte que si ce n'est pas une déconnexion volontaire
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log("🔄 Tentative de reconnexion dans 5 secondes...");
-                setTimeout(connectToWhatsApp, 5000);
+            const statusCode = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.code;
+            // On ne reconnecte que si ce n'est pas une déconnexion manuelle
+            if (statusCode !== DisconnectReason.loggedOut) {
+                console.log("🔄 Reconnexion dans 10s...");
+                setTimeout(connectToWhatsApp, 10000);
             }
         }
     });
-
-    // On expose le socket pour les requêtes HTTP
-    app.locals.sock = sock;
 }
 
+// --- 3. RÉCEPTION DES MESSAGES DE GOOGLE SHEETS ---
 app.post("/update", async (req, res) => {
     const { action, chatId, text, msgId } = req.body;
-    const sock = app.locals.sock;
-    if (!sock) return res.status(500).send("Bot non initialisé");
+    if (!sock) return res.status(503).send("Bot en cours de démarrage");
 
     try {
         if (action === "send") {
             const sent = await sock.sendMessage(chatId, { text });
             return res.json(sent);
         } 
-        if (action === "delete") {
+        if (action === "delete" && msgId) {
             await sock.sendMessage(chatId, { delete: msgId });
             return res.json({ status: "ok" });
         }
@@ -73,8 +69,10 @@ app.post("/update", async (req, res) => {
     }
 });
 
+// --- 4. DÉMARRAGE DU SERVEUR ---
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => {
-    console.log(`🌐 Serveur sur port ${PORT}`);
-    connectToWhatsApp().catch(err => console.log("Erreur critique :", err));
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Serveur web sur port ${PORT}`);
+    // On lance WhatsApp APRÈS que le serveur soit prêt
+    connectToWhatsApp().catch(err => console.log("Erreur boot:", err));
 });
