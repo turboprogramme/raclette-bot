@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json());
 
 // --- CONFIGURATION ---
-const SCRIPT_URL = "METS_ICI_TON_URL_WEB_APP_GOOGLE"; 
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaCXBVhq6tQDFJ1H5owJQU4qNUGHXK5K0jmTOtlj97DG38u7XdremJCjmC330jC2Ww/exec"; 
 const phoneNumber = "33769403239"; 
 
 let sock;
@@ -78,3 +78,4 @@ app.post("/update", async (req, res) => {
 });
 
 app.listen(8000, '0.0.0.0', () => connectToWhatsApp());
+
