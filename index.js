@@ -1,71 +1,58 @@
-const crypto = require('node:crypto');
-if (!global.crypto) global.crypto = crypto.webcrypto;
+const API_URL = "https://conventional-lexy-raclette-1b139262.koyeb.app/update"; 
+const GROUP_ID = "120363026172968119@g.us"; 
 
-const { 
-    default: makeWASocket, 
-    useMultiFileAuthState, 
-    DisconnectReason, 
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore
-} = require("@whiskeysockets/baileys");
-const express = require("express");
-const pino = require("pino");
+function refreshDashboard() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  const data = sheet.getDataRange().getValues().slice(1); 
+  const total = data.length;
+  if (total === 0) return;
 
-const app = express();
-app.use(express.json());
+  const guestList = data.map(r => `  🔹 *${r[1]}*`).join('\n');
+  const dashboard = `📢 *TABLEAU DE BORD STAFF* 📢\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n👥 *TOTAL :* ${total}\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n📜 *PRÉSENTS :*\n${guestList}\n\n🔄 _MàJ : ${new Date().toLocaleTimeString()}_`;
 
-app.get("/", (req, res) => res.status(200).send("BOT_STAFF_READY"));
+  const props = PropertiesService.getScriptProperties();
+  const lastKey = props.getProperty('LAST_KEY');
 
-let sock;
+  // 1. Suppression sécurisée
+  if (lastKey && lastKey !== "undefined") {
+    try {
+      const parsedKey = JSON.parse(lastKey);
+      if (parsedKey && parsedKey.id) { // On vérifie que l'ID existe vraiment
+        sendToBot({ action: "delete", chatId: GROUP_ID, msgId: parsedKey });
+      }
+    } catch(e) { console.log("Erreur parse ID: " + e); }
+  }
 
-async function connectToWhatsApp() {
-    const { version } = await fetchLatestBaileysVersion();
-    const { state, saveCreds } = await useMultiFileAuthState('auth_final');
-    
-    sock = makeWASocket({
-        version,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
-        },
-        logger: pino({ level: 'silent' }), 
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
-    });
+  // 2. Envoi du nouveau
+  const response = sendToBot({ action: "send", chatId: GROUP_ID, text: dashboard });
 
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === 'open') console.log("🚀 BOT CONNECTÉ ET SILENCIEUX");
-        if (connection === 'close') {
-            const code = lastDisconnect?.error?.output?.statusCode;
-            if (code !== DisconnectReason.loggedOut) setTimeout(connectToWhatsApp, 5000);
-        }
-    });
+  // 3. Sauvegarde de la clé
+  if (response && response.key) {
+    props.setProperty('LAST_KEY', JSON.stringify(response.key));
+  }
 }
 
-// ROUTE DE RÉCEPTION DES ORDRES
-app.post("/update", async (req, res) => {
-    const { action, chatId, text, msgId } = req.body;
-    if (!sock) return res.status(503).send("Indisponible");
+function sendToBot(payload) {
+  const options = { 
+    method: "post", 
+    contentType: "application/json", 
+    payload: JSON.stringify(payload), 
+    muteHttpExceptions: true 
+  };
+  const res = UrlFetchApp.fetch(API_URL, options);
+  const result = JSON.parse(res.getContentText());
+  Logger.log("Réponse Bot: " + JSON.stringify(result)); // Pour voir l'erreur ici !
+  return result;
+}
 
-    try {
-        if (action === "send") {
-            const sent = await sock.sendMessage(chatId, { text });
-            return res.json(sent); 
-        } 
-        else if (action === "delete" && msgId) {
-            // Suppression sécurisée
-            await sock.sendMessage(chatId, { delete: msgId });
-            return res.json({ status: "ok" });
-        }
-    } catch (e) {
-        res.status(500).send("Erreur : " + e.message);
-    }
-});
-
-const PORT = process.env.PORT || 8000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log("🚀 Serveur actif sur port 8000");
-    connectToWhatsApp();
-});
+function setup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => ScriptApp.deleteTrigger(t));
+  
+  ScriptApp.newTrigger('refreshDashboard').forSpreadsheet(ss).onFormSubmit().create();
+  ScriptApp.newTrigger('refreshDashboard').forSpreadsheet(ss).onEdit().create();
+  
+  console.log("✅ Surveillance activée !");
+  refreshDashboard(); 
+}
