@@ -1,78 +1,89 @@
+const crypto = require('node:crypto');
+if (!global.crypto) global.crypto = crypto.webcrypto;
+
 const { 
     default: makeWASocket, 
     useMultiFileAuthState, 
     DisconnectReason, 
-    fetchLatestBaileysVersion 
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore
 } = require("@whiskeysockets/baileys");
 const express = require("express");
-const qrcode = require("qrcode-terminal");
 const pino = require("pino");
 
 const app = express();
 app.use(express.json());
 
-// 1. Pour Koyeb : On dit qu'on est vivant tout de suite
-app.get("/", (req, res) => res.status(200).send("BOT_EN_LIGNE"));
+// 1. APPEL À KOYEB
+app.get("/", (req, res) => res.status(200).send("BOT_PAIRING_MODE"));
 
 let sock;
 
-async function startBot() {
-    console.log("⚙️ Démarrage...");
-    
-    // On récupère la vraie version de WhatsApp pour éviter le blocage 405
+async function connectToWhatsApp() {
+    console.log("🛠️ Démarrage en mode CODE DE JUMELAGE...");
     const { version } = await fetchLatestBaileysVersion();
-    const { state, saveCreds } = await useMultiFileAuthState('auth_folder');
+    const { state, saveCreds } = await useMultiFileAuthState('auth_final');
     
     sock = makeWASocket({
         version,
-        auth: state,
-        logger: pino({ level: 'silent' }), // Silencieux pour nettoyer les logs
-        printQRInTerminal: true, // On remet ça, Koyeb le gère bien avec Node 20
-        browser: ["Ubuntu", "Chrome", "120.0.0"],
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+        },
+        logger: pino({ level: 'silent' }), 
+        printQRInTerminal: false, // On désactive le QR déformé
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
         connectTimeoutMs: 60000
     });
+
+    // --- C'EST ICI QUE LA MAGIE OPÈRE ---
+    if(!sock.authState.creds.registered) {
+        // ATTENTION : REMPLACE LE NUMÉRO CI-DESSOUS PAR LE TIEN !
+        // Format : 336... (France), 32... (Belgique), etc.
+        const phoneNumber = "33769403239"; 
+        
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(phoneNumber);
+                console.log("------------------------------------------------");
+                console.log("🚨 TON CODE DE JUMELAGE EST : " + code);
+                console.log("------------------------------------------------");
+            } catch (err) {
+                console.log("Erreur demande code: ", err);
+            }
+        }, 3000);
+    }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        if (qr) {
-            console.log("🚨 --- SCANNE CE QR CODE MAINTENANT --- 🚨");
-            qrcode.generate(qr, { small: true });
-            console.log("---------------------------------------");
-        }
+        const { connection, lastDisconnect } = update;
         
         if (connection === 'open') {
-            console.log("✅ SUCCÈS TOTAL : LE BOT EST CONNECTÉ !");
+            console.log("✅ SUCCÈS : BOT CONNECTÉ VIA CODE !");
         }
         
         if (connection === 'close') {
             const code = lastDisconnect?.error?.output?.statusCode;
-            console.log(`❌ Coupure (Code: ${code}). Redémarrage...`);
             if (code !== DisconnectReason.loggedOut) {
-                setTimeout(startBot, 5000); // On relance proprement
+                setTimeout(connectToWhatsApp, 5000);
             }
         }
     });
 }
 
-// Route pour Google Sheets
 app.post("/update", async (req, res) => {
     const { action, chatId, text } = req.body;
     try {
         if (action === "send" && sock) {
             await sock.sendMessage(chatId, { text });
             res.json({ status: "sent" });
-        } else {
-            res.status(500).json({ error: "Bot pas prêt" });
         }
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
+    } catch (e) { res.status(500).send(e.message); }
 });
 
-app.listen(8000, '0.0.0.0', () => {
-    console.log("🚀 Serveur Web OK sur port 8000");
-    startBot();
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log("🚀 Serveur prêt");
+    connectToWhatsApp();
 });
