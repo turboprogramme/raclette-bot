@@ -14,7 +14,7 @@ const pino = require("pino");
 const app = express();
 app.use(express.json());
 
-app.get("/", (req, res) => res.status(200).send("BOT_ACTIF"));
+app.get("/", (req, res) => res.status(200).send("BOT_STAFF_READY"));
 
 let sock;
 
@@ -36,7 +36,7 @@ async function connectToWhatsApp() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
-        if (connection === 'open') console.log("✅ BOT OPÉRATIONNEL");
+        if (connection === 'open') console.log("🚀 BOT CONNECTÉ ET SILENCIEUX");
         if (connection === 'close') {
             const code = lastDisconnect?.error?.output?.statusCode;
             if (code !== DisconnectReason.loggedOut) setTimeout(connectToWhatsApp, 5000);
@@ -44,30 +44,28 @@ async function connectToWhatsApp() {
     });
 }
 
-// --- CETTE PARTIE GÈRE LES ORDRES DE GOOGLE ---
+// ROUTE DE RÉCEPTION DES ORDRES
 app.post("/update", async (req, res) => {
     const { action, chatId, text, msgId } = req.body;
-    if (!sock) return res.status(503).send("Bot non prêt");
+    if (!sock) return res.status(503).send("Indisponible");
 
     try {
         if (action === "send") {
-            // On envoie et on renvoie l'objet complet pour que Google récupère l'ID
             const sent = await sock.sendMessage(chatId, { text });
             return res.json(sent); 
         } 
         else if (action === "delete" && msgId) {
-            // On supprime le message spécifique envoyé par Google
+            // Suppression sécurisée
             await sock.sendMessage(chatId, { delete: msgId });
-            return res.json({ status: "deleted" });
+            return res.json({ status: "ok" });
         }
     } catch (e) {
-        console.error("Erreur commande:", e.message);
-        res.status(500).send(e.message);
+        res.status(500).send("Erreur : " + e.message);
     }
 });
 
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log("🚀 Serveur actif");
+    console.log("🚀 Serveur actif sur port 8000");
     connectToWhatsApp();
 });
