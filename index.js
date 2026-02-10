@@ -7,6 +7,7 @@ const pino = require("pino");
 
 const app = express();
 app.use(express.json());
+
 app.get("/", (req, res) => res.status(200).send("BOT_STAFF_READY"));
 
 let sock;
@@ -29,23 +30,26 @@ async function connectToWhatsApp() {
 
 app.post("/update", async (req, res) => {
     const { action, chatId, text, msgId } = req.body;
-    if (!sock) return res.status(503).send("Bot non prêt");
+    if (!sock) return res.status(200).json({ error: "Bot non prêt" });
+
     try {
         if (action === "send") {
             const sent = await sock.sendMessage(chatId, { text });
             return res.json(sent); 
         } 
         else if (action === "delete") {
-            // SÉCURITÉ : On ne tente la suppression que si l'ID est valide
-            if (msgId && msgId.id) {
+            // PROTECTION CRUCIALE : On vérifie la structure de msgId avant d'agir
+            if (msgId && typeof msgId === 'object' && msgId.id) {
                 await sock.sendMessage(chatId, { delete: msgId });
+                return res.json({ status: "deleted" });
             }
-            return res.json({ status: "ok" });
+            return res.json({ status: "skipped", reason: "invalid_id" });
         }
     } catch (e) {
-        console.log("Erreur commande :", e.message);
-        res.status(200).json({ status: "error", message: e.message }); // On répond 200 pour ne pas bloquer Google
+        // On renvoie TOUJOURS du JSON, même ici
+        return res.status(200).json({ status: "error", message: e.message });
     }
 });
 
-app.listen(8000, '0.0.0.0', () => connectToWhatsApp());
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, '0.0.0.0', () => connectToWhatsApp());
