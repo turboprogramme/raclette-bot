@@ -6,21 +6,18 @@ const pino = require("pino");
 const app = express();
 app.use(express.json());
 
-// Message de test pour vérifier que le serveur répond sur le web
 app.get("/", (req, res) => res.send("✅ API Raclette en ligne !"));
 
-let sock;
-
 async function connectToWhatsApp() {
-    console.log("🚀 INITIALISATION DE LA CONNEXION WHATSAPP...");
+    console.log("🚀 TENTATIVE DE CONNEXION...");
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     
-    sock = makeWASocket({
+    const sock = makeWASocket({
         auth: state,
-        logger: pino({ level: 'silent' }), // On cache les logs inutiles
-        printQRInTerminal: true, // COMMANDE CRUCIALE POUR LE QR CODE
-        browser: ["Chrome (Linux)", "RacletteBot", "1.0.0"]
+        logger: pino({ level: 'info' }), // On active les logs pour voir l'erreur
+        printQRInTerminal: true,
+        browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -29,30 +26,42 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            console.log("📢 QR CODE REÇU ! PRÉPARE TON TÉLÉPHONE :");
+            console.log("📢 QR CODE DISPONIBLE !");
             qrcode.generate(qr, { small: true });
         }
         
         if (connection === 'open') {
-            console.log("✅ RACLETTE BOT CONNECTÉ ET PRÊT !");
+            console.log("✅ RACLETTE BOT CONNECTÉ !");
         }
         
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log("❌ CONNEXION FERMÉE. RECONNEXION :", shouldReconnect);
-            if (shouldReconnect) connectToWhatsApp();
+            const error = lastDisconnect?.error;
+            const statusCode = error?.output?.statusCode || error?.code;
+            
+            console.log(`❌ CONNEXION FERMÉE ! Code: ${statusCode}`);
+            console.log("Détails de l'erreur :", error);
+
+            // On ne reconnecte que si ce n'est pas une déconnexion volontaire
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) {
+                console.log("🔄 Tentative de reconnexion dans 5 secondes...");
+                setTimeout(connectToWhatsApp, 5000);
+            }
         }
     });
+
+    // On expose le socket pour les requêtes HTTP
+    app.locals.sock = sock;
 }
 
-// ENDPOINT POUR GOOGLE APPS SCRIPT
 app.post("/update", async (req, res) => {
     const { action, chatId, text, msgId } = req.body;
-    console.log(`📩 ACTION REÇUE : ${action} pour ${chatId}`);
-    
+    const sock = app.locals.sock;
+    if (!sock) return res.status(500).send("Bot non initialisé");
+
     try {
         if (action === "send") {
-            const sent = await sock.sendMessage(chatId, { text: text });
+            const sent = await sock.sendMessage(chatId, { text });
             return res.json(sent);
         } 
         if (action === "delete") {
@@ -60,14 +69,12 @@ app.post("/update", async (req, res) => {
             return res.json({ status: "ok" });
         }
     } catch (e) {
-        console.error("⚠️ ERREUR API :", e.message);
         res.status(500).send(e.message);
     }
 });
 
-// LANCEMENT DU SERVEUR
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
-    console.log(`🌐 SERVEUR DÉMARRÉ SUR LE PORT ${PORT}`);
-    connectToWhatsApp();
+    console.log(`🌐 Serveur sur port ${PORT}`);
+    connectToWhatsApp().catch(err => console.log("Erreur critique :", err));
 });
