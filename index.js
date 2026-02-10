@@ -14,12 +14,13 @@ const pino = require("pino");
 const app = express();
 app.use(express.json());
 
-app.get("/", (req, res) => res.status(200).send("BOT_EN_LIGNE"));
+// 1. APPEL À KOYEB
+app.get("/", (req, res) => res.status(200).send("BOT_PAIRING_MODE"));
 
 let sock;
 
 async function connectToWhatsApp() {
-    console.log("🔄 Connexion en cours...");
+    console.log("🛠️ Démarrage en mode CODE DE JUMELAGE...");
     const { version } = await fetchLatestBaileysVersion();
     const { state, saveCreds } = await useMultiFileAuthState('auth_final');
     
@@ -30,29 +31,43 @@ async function connectToWhatsApp() {
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
         },
         logger: pino({ level: 'silent' }), 
-        printQRInTerminal: false,
+        printQRInTerminal: false, // On désactive le QR déformé
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         connectTimeoutMs: 60000
     });
+
+    // --- C'EST ICI QUE LA MAGIE OPÈRE ---
+    if(!sock.authState.creds.registered) {
+        // ATTENTION : REMPLACE LE NUMÉRO CI-DESSOUS PAR LE TIEN !
+        // Format : 336... (France), 32... (Belgique), etc.
+        const phoneNumber = "33769403239"; 
+        
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(phoneNumber);
+                console.log("------------------------------------------------");
+                console.log("🚨 TON CODE DE JUMELAGE EST : " + code);
+                console.log("------------------------------------------------");
+            } catch (err) {
+                console.log("Erreur demande code: ", err);
+            }
+        }, 3000);
+    }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
-        if (connection === 'open') console.log("✅ BOT CONNECTÉ ! PRÊT À DÉTECTER LE GROUPE.");
+        
+        if (connection === 'open') {
+            console.log("✅ SUCCÈS : BOT CONNECTÉ VIA CODE !");
+        }
+        
         if (connection === 'close') {
             const code = lastDisconnect?.error?.output?.statusCode;
-            if (code !== DisconnectReason.loggedOut) setTimeout(connectToWhatsApp, 5000);
-        }
-    });
-
-    // --- LE RADAR À GROUPE ---
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const m = messages[0];
-        if (!m.key.fromMe && m.message) {
-            console.log("------------------------------------------------");
-            console.log("📍 ID DU GROUPE DÉTECTÉ : " + m.key.remoteJid);
-            console.log("------------------------------------------------");
+            if (code !== DisconnectReason.loggedOut) {
+                setTimeout(connectToWhatsApp, 5000);
+            }
         }
     });
 }
