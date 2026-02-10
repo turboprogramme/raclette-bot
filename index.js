@@ -14,13 +14,11 @@ const pino = require("pino");
 const app = express();
 app.use(express.json());
 
-// 1. APPEL À KOYEB
-app.get("/", (req, res) => res.status(200).send("BOT_PAIRING_MODE"));
+app.get("/", (req, res) => res.status(200).send("BOT_ACTIF"));
 
 let sock;
 
 async function connectToWhatsApp() {
-    console.log("🛠️ Démarrage en mode CODE DE JUMELAGE...");
     const { version } = await fetchLatestBaileysVersion();
     const { state, saveCreds } = await useMultiFileAuthState('auth_final');
     
@@ -28,62 +26,48 @@ async function connectToWhatsApp() {
         version,
         auth: {
             creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
         },
         logger: pino({ level: 'silent' }), 
-        printQRInTerminal: false, // On désactive le QR déformé
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
-        connectTimeoutMs: 60000
+        browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
-
-    // --- C'EST ICI QUE LA MAGIE OPÈRE ---
-    if(!sock.authState.creds.registered) {
-        // ATTENTION : REMPLACE LE NUMÉRO CI-DESSOUS PAR LE TIEN !
-        // Format : 336... (France), 32... (Belgique), etc.
-        const phoneNumber = "33769403239"; 
-        
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(phoneNumber);
-                console.log("------------------------------------------------");
-                console.log("🚨 TON CODE DE JUMELAGE EST : " + code);
-                console.log("------------------------------------------------");
-            } catch (err) {
-                console.log("Erreur demande code: ", err);
-            }
-        }, 3000);
-    }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
-        
-        if (connection === 'open') {
-            console.log("✅ SUCCÈS : BOT CONNECTÉ VIA CODE !");
-        }
-        
+        if (connection === 'open') console.log("✅ BOT OPÉRATIONNEL");
         if (connection === 'close') {
             const code = lastDisconnect?.error?.output?.statusCode;
-            if (code !== DisconnectReason.loggedOut) {
-                setTimeout(connectToWhatsApp, 5000);
-            }
+            if (code !== DisconnectReason.loggedOut) setTimeout(connectToWhatsApp, 5000);
         }
     });
 }
 
+// --- CETTE PARTIE GÈRE LES ORDRES DE GOOGLE ---
 app.post("/update", async (req, res) => {
-    const { action, chatId, text } = req.body;
+    const { action, chatId, text, msgId } = req.body;
+    if (!sock) return res.status(503).send("Bot non prêt");
+
     try {
-        if (action === "send" && sock) {
-            await sock.sendMessage(chatId, { text });
-            res.json({ status: "sent" });
+        if (action === "send") {
+            // On envoie et on renvoie l'objet complet pour que Google récupère l'ID
+            const sent = await sock.sendMessage(chatId, { text });
+            return res.json(sent); 
+        } 
+        else if (action === "delete" && msgId) {
+            // On supprime le message spécifique envoyé par Google
+            await sock.sendMessage(chatId, { delete: msgId });
+            return res.json({ status: "deleted" });
         }
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) {
+        console.error("Erreur commande:", e.message);
+        res.status(500).send(e.message);
+    }
 });
 
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log("🚀 Serveur prêt");
+    console.log("🚀 Serveur actif");
     connectToWhatsApp();
 });
