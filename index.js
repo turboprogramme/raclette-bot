@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json());
 
 // --- CONFIGURATION ---
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaCXBVhq6tQDFJ1H5owJQU4qNUGHXK5K0jmTOtlj97DG38u7XdremJCjmC330jC2Ww/exec"; 
+const SCRIPT_URL = "TON_URL_WEB_APP_GOOGLE"; 
 const phoneNumber = "33769403239"; 
 
 let sock;
@@ -42,12 +42,15 @@ async function connectToWhatsApp() {
         const m = messages[0];
         if (!m.message || m.key.fromMe) return;
 
+        // --- DÉTECTION SOUPLE DE LA COMMANDE ---
         const messageText = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim().toLowerCase();
         const quotedId = m.message.extendedTextMessage?.contextInfo?.stanzaId;
 
-        // Condition : Texte exact "liste?" ET réponse au dernier dashboard
-        if (messageText === "liste?" && quotedId === lastDashboardId) {
-            console.log("🔍 Commande 'liste?' validée.");
+        // Regex pour accepter : "liste?", "liste ?", "Liste ?", "Liste?"
+        const isListeCommand = /^liste\s*\?$/.test(messageText);
+
+        if (isListeCommand && quotedId === lastDashboardId) {
+            console.log("🔍 Commande validée pour : " + messageText);
             try { await axios.post(SCRIPT_URL, { action: "get_full_list" }); } catch (e) { console.error(e.message); }
         }
     });
@@ -66,7 +69,7 @@ app.post("/update", async (req, res) => {
             const sent = await sock.sendMessage(chatId, { text });
             if (text.includes("COMPTEUR")) {
                 lastDashboardId = sent.key.id;
-                console.log("📌 Dashboard ID mémorisé : " + lastDashboardId);
+                console.log("📌 ID Compteur mémorisé : " + lastDashboardId);
             }
             return res.json(sent); 
         } 
@@ -78,4 +81,3 @@ app.post("/update", async (req, res) => {
 });
 
 app.listen(8000, '0.0.0.0', () => connectToWhatsApp());
-
